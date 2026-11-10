@@ -1,0 +1,83 @@
+name: infosec-zabbix
+
+# Отдельный проект, потому что Zabbix тяжёлый и включать его нужно не всегда.
+# Подключается к сети основного стенда, чтобы видеть app-01, mysql и остальных.
+# Запуск:   docker compose -f compose.zabbix.yml up -d
+# Веб:      http://localhost:8081   (Admin / zabbix)
+
+networks:
+  lab:
+    external: true
+    name: infosec-lab
+
+volumes:
+  zabbix-db:
+
+services:
+
+  zabbix-db:
+    image: mysql:8.0
+    container_name: zabbix-db
+    # log_bin_trust_function_creators нужен Zabbix с версии 6.0:
+    # при установке создаются детерминированные триггеры.
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_bin
+      --log_bin_trust_function_creators=1
+    environment:
+      MYSQL_ROOT_PASSWORD: ${ZBX_DB_ROOT_PASSWORD:-zbxroot}
+      MYSQL_DATABASE: zabbix
+      MYSQL_USER: zabbix
+      MYSQL_PASSWORD: ${ZBX_DB_PASSWORD:-zbxpass}
+    volumes:
+      - zabbix-db:/var/lib/mysql
+    networks:
+      - lab
+    restart: unless-stopped
+
+  zabbix-server:
+    image: zabbix/zabbix-server-mysql:alpine-7.0-latest
+    container_name: zabbix-server
+    hostname: zabbix-server
+    environment:
+      DB_SERVER_HOST: zabbix-db
+      MYSQL_DATABASE: zabbix
+      MYSQL_USER: zabbix
+      MYSQL_PASSWORD: ${ZBX_DB_PASSWORD:-zbxpass}
+      MYSQL_ROOT_PASSWORD: ${ZBX_DB_ROOT_PASSWORD:-zbxroot}
+    ports:
+      - "127.0.0.1:10051:10051"
+    depends_on:
+      - zabbix-db
+    networks:
+      - lab
+    restart: unless-stopped
+
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-mysql:alpine-7.0-latest
+    container_name: zabbix-web
+    environment:
+      ZBX_SERVER_HOST: zabbix-server
+      DB_SERVER_HOST: zabbix-db
+      MYSQL_DATABASE: zabbix
+      MYSQL_USER: zabbix
+      MYSQL_PASSWORD: ${ZBX_DB_PASSWORD:-zbxpass}
+      PHP_TZ: ${TZ:-Europe/Moscow}
+    ports:
+      - "127.0.0.1:8081:8080"
+    depends_on:
+      - zabbix-server
+    networks:
+      - lab
+    restart: unless-stopped
+
+  zabbix-agent:
+    image: zabbix/zabbix-agent:alpine-7.0-latest
+    container_name: zabbix-agent
+    hostname: zabbix-agent
+    environment:
+      ZBX_HOSTNAME: "Zabbix server"
+      ZBX_SERVER_HOST: zabbix-server
+    networks:
+      - lab
+    restart: unless-stopped

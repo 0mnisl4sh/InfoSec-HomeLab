@@ -1,0 +1,150 @@
+name: infosec-homelab
+
+# Все порты публикуются ТОЛЬКО на 127.0.0.1.
+# Пароли в стенде слабые и намеренно кривые права — наружу это выставлять нельзя.
+
+networks:
+  lab:
+    name: infosec-lab
+
+volumes:
+  mysql-data:
+  gitea-data:
+  redis-data:
+  rabbitmq-data:
+
+services:
+
+  # ------------------------------------------------------------------
+  # app-01 — «боевой» сервер: SSH + nginx. Сюда выдаём и отзываем доступы.
+  # ------------------------------------------------------------------
+  app-01:
+    build: ./app-01
+    image: infosec-homelab/app-01
+    container_name: app-01
+    hostname: app-01
+    environment:
+      LAB_FQDN: ${LAB_FQDN:-app-01.lab}
+      LAB_ADMIN_USER: ${LAB_ADMIN_USER:-labadmin}
+      LAB_ADMIN_PASSWORD: ${LAB_ADMIN_PASSWORD:-labadmin}
+      LAB_ADMIN_PUBKEY: ${LAB_ADMIN_PUBKEY:-}
+    ports:
+      - "127.0.0.1:2222:22"
+      - "127.0.0.1:8080:80"
+      - "127.0.0.1:8443:443"
+    volumes:
+      # Каталог, куда УЦ складывает выпущенные сертификаты (только чтение)
+      - ./ca/pki/issued:/etc/nginx/certs:ro
+    networks:
+      lab:
+        aliases:
+          - app-01.lab
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------
+  # ca — рабочее место администратора УЦ (root CA + intermediate CA)
+  # ------------------------------------------------------------------
+  ca:
+    build: ./ca
+    image: infosec-homelab/ca
+    container_name: ca
+    hostname: ca
+    environment:
+      CA_PASSPHRASE: ${CA_PASSPHRASE:-labpass}
+      CA_ORG: ${CA_ORG:-InfoSec HomeLab}
+      CA_COUNTRY: ${CA_COUNTRY:-RU}
+    volumes:
+      - ./ca/pki:/pki
+    networks:
+      - lab
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------
+  # mysql — три схемы и набор учёток, часть из них намеренно с избыточными правами
+  # ------------------------------------------------------------------
+  mysql:
+    image: mysql:8.4
+    container_name: mysql
+    hostname: mysql
+    command: --local-infile=0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpass}
+    ports:
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${MYSQL_ROOT_PASSWORD:-rootpass}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - lab
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------
+  # gitea — лёгкая замена GitLab: роли, права на репозитории, токены, deploy keys
+  # (если нужен именно GitLab CE — см. compose.gitlab.yml)
+  # ------------------------------------------------------------------
+  gitea:
+    image: gitea/gitea:1.22
+    container_name: gitea
+    hostname: gitea
+    environment:
+      USER_UID: 1000
+      USER_GID: 1000
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__server__DOMAIN: localhost
+      GITEA__server__ROOT_URL: http://localhost:3000/
+      GITEA__server__SSH_PORT: "2223"
+      GITEA__service__DISABLE_REGISTRATION: "true"
+    ports:
+      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:2223:22"
+    volumes:
+      - gitea-data:/data
+    networks:
+      - lab
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------
+  # redis — пароль, protected-mode, ACL
+  # ------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    hostname: redis
+    command:
+      - redis-server
+      - /usr/local/etc/redis/redis.conf
+      - --requirepass
+      - ${REDIS_PASSWORD:-redispass}
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - redis-data:/data
+    networks:
+      - lab
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------
+  # rabbitmq — пользователи, vhost'ы, permissions (веб-консоль на 15672)
+  # ------------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: rabbitmq
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-admin}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-rabbitpass}
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - lab
+    restart: unless-stopped

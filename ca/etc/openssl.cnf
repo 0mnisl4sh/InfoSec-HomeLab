@@ -1,0 +1,81 @@
+# ---------------------------------------------------------------------------
+# Конфиг учебного УЦ. Один файл используется и для root, и для intermediate CA:
+# каталог берётся из переменной окружения CA_DIR, которую выставляют скрипты.
+# ---------------------------------------------------------------------------
+
+[ ca ]
+default_ca = CA_default
+
+[ CA_default ]
+dir               = $ENV::CA_DIR
+certs             = $dir/certs
+crl_dir           = $dir/crl
+new_certs_dir     = $dir/newcerts
+database          = $dir/index.txt
+serial            = $dir/serial
+private_key       = $dir/private/ca.key.pem
+certificate       = $dir/certs/ca.cert.pem
+crlnumber         = $dir/crlnumber
+crl               = $dir/crl/ca.crl.pem
+crl_extensions    = crl_ext
+default_crl_days  = 30
+default_md        = sha256
+name_opt          = ca_default
+cert_opt          = ca_default
+default_days      = 397
+preserve          = no
+policy            = policy_loose
+email_in_dn       = no
+# unique_subject = no — разрешает перевыпуск сертификата для того же CN.
+# Серийные номера берутся последовательно из файла serial (1000, 1001, ...),
+# история выпуска и отзывов пишется в index.txt. В проде публичные УЦ обязаны
+# использовать случайные серийники — это включается опцией rand_serial.
+unique_subject    = no
+
+# Мягкая политика: удобно для лабы, в проде для intermediate обычно строже.
+[ policy_loose ]
+countryName             = optional
+stateOrProvinceName     = optional
+localityName            = optional
+organizationName        = optional
+organizationalUnitName  = optional
+commonName              = supplied
+emailAddress            = optional
+
+[ req ]
+default_bits        = 2048
+distinguished_name  = req_distinguished_name
+string_mask         = utf8only
+default_md          = sha256
+prompt              = no
+
+# Значения по умолчанию; скрипты всё равно передают -subj.
+[ req_distinguished_name ]
+C  = RU
+O  = InfoSec HomeLab
+CN = InfoSec HomeLab CA
+
+# Корневой УЦ
+[ v3_ca ]
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid:always,issuer
+basicConstraints       = critical, CA:true
+keyUsage               = critical, digitalSignature, cRLSign, keyCertSign
+
+# Промежуточный УЦ: pathlen:0 — он не может выпускать другие УЦ
+[ v3_intermediate_ca ]
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid:always,issuer
+basicConstraints       = critical, CA:true, pathlen:0
+keyUsage               = critical, digitalSignature, cRLSign, keyCertSign
+
+# Серверный сертификат. SAN добавляется скриптом через -extfile.
+[ server_cert ]
+basicConstraints       = CA:FALSE
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid,issuer:always
+keyUsage               = critical, digitalSignature, keyEncipherment
+extendedKeyUsage       = serverAuth
+
+[ crl_ext ]
+authorityKeyIdentifier = keyid:always
